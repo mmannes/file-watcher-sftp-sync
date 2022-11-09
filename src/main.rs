@@ -1,12 +1,12 @@
 use std::{path::Path, time::Duration};
 use std::ffi::OsStr;
 
-use notify::{RecursiveMode};
+use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
 use std::io::prelude::*;
 use std::net::TcpStream;
-use ssh2::{Session};
+use ssh2::Session;
 
 use std::fs;
 use std::env;
@@ -41,7 +41,7 @@ fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
                                         0o644, file_size, None);
     match channel {
         Ok(mut remote_file) => {
-            remote_file.write(&local_file).unwrap();
+            remote_file.write_all(&local_file).unwrap();
             // Close the channel and wait for the whole content to be transfered
             remote_file.send_eof().unwrap();
             remote_file.wait_eof().unwrap();
@@ -74,7 +74,7 @@ fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
                                                         0o644, file_size, None);
                     match channel {
                         Ok(mut remote_file) => {
-                            remote_file.write(&local_file).unwrap();
+                            remote_file.write_all(&local_file).unwrap();
                             // Close the channel and wait for the whole content to be transfered
                             remote_file.send_eof().unwrap();
                             remote_file.wait_eof().unwrap();
@@ -103,7 +103,7 @@ fn main() {
     let (tx, rx) = std::sync::mpsc::channel();
 
     // No specific tickrate, max debounce time 2 seconds
-    let mut debouncer = new_debouncer(Duration::from_millis(100), None, tx).unwrap();
+    let mut debouncer = new_debouncer(Duration::from_millis(1000), None, tx).unwrap();
 
     debouncer
         .watcher()
