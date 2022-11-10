@@ -8,10 +8,10 @@ use std::io::prelude::*;
 use std::net::TcpStream;
 use ssh2::Session;
 
-use std::fs;
+use std::{fs, thread};
 use std::env;
 
-fn connect_to_ssh_host(tcp: TcpStream, mut sess: Session) -> Session {
+fn auth_to_ssh_host(tcp: TcpStream, mut sess: Session) -> Session {
     sess.set_tcp_stream(tcp);
     sess.handshake().unwrap();
     sess.userauth_password("extranetdev", "53CiVm8zG7DmKS").unwrap();
@@ -23,7 +23,7 @@ fn connect_to_ssh_host(tcp: TcpStream, mut sess: Session) -> Session {
     sess
 }
 
-fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
+fn send_file(mut sess: Session, file: &Path) -> Result<Session, &'static str> {
     let local_file = fs::read(file).unwrap();
     let file_size: u64 = local_file.len().try_into().unwrap();
     let remote_path = Path::new("/home/extranetdev/media/www/");
@@ -48,10 +48,24 @@ fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
             remote_file.close().unwrap();
             remote_file.wait_close().unwrap();
             print!("OK\r\n");
-            Ok(())
+            Ok(sess)
         },
-        Err(_) => {
+        Err(error) => {
             print!("\r\n");
+            match error.code() {
+                ssh2::ErrorCode::Session(i) => {
+                    if i == -7 {
+                        println!("Session error with code {}, trying to reconnect...", i);
+                        let tcp: TcpStream;
+                        (sess, tcp) = connect();
+                        sess = auth_to_ssh_host(tcp, sess);
+                        return send_file(sess, &file);
+                    } else {
+                        println!("Session error with code {}", i);
+                    }
+                },
+                ssh2::ErrorCode::SFTP(i) => println!("Sftp error with code {}", i),
+            }
             // try to get the parent directory and then try to send it again
             let sftp = sess.sftp();
             match sftp {
@@ -81,7 +95,7 @@ fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
                             remote_file.close().unwrap();
                             remote_file.wait_close().unwrap();
                             print!("OK\r\n");
-                            Ok(())
+                            Ok(sess)
                         },
                         Err(_) => Err("Failed when trying to send file after creating its path, probably there is a permission problem.")
                     }
@@ -92,12 +106,36 @@ fn send_file(sess: &Session, file: &Path) -> Result<(), &'static str> {
     }
 }
 
+fn connect() -> (ssh2::Session, TcpStream){
+    let sess = Session::new().unwrap();
+    let tcp = TcpStream::connect("192.168.99.192:22").unwrap();
+    return (sess, tcp)
+}
+
+fn print_apache2_error_log() -> thread::JoinHandle<()> {
+    thread::spawn(|| {
+        let (mut sess, tcp) = connect();
+        sess = auth_to_ssh_host(tcp, sess);
+        let mut channel = sess.channel_session().unwrap();
+        channel.exec("tail -f -n 0 ~/media/log/error.log").unwrap();
+        let mut buffer = [0; 256];
+        while let Ok(n) = channel.read(&mut buffer[..]) {
+            let s = match std::str::from_utf8(&buffer[..n]) {
+                Ok(v) => v,
+                Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+            };
+            print!("{}", s);
+        };
+    })
+}
+
 
 /// Example for debouncer
 fn main() {
-    let mut sess = Session::new().unwrap();
-    let tcp = TcpStream::connect("192.168.99.192:22").unwrap();
-    sess = connect_to_ssh_host(tcp, sess);
+    let (mut sess, tcp) = connect();
+    sess = auth_to_ssh_host(tcp, sess);
+
+    let _read_logs = print_apache2_error_log();
 
     // setup debouncer
     let (tx, rx) = std::sync::mpsc::channel();
@@ -119,10 +157,12 @@ fn main() {
                 let file_path = Path::new(&event.path);
                 let file_extension = file_path.extension().unwrap_or(OsStr::new(""));
                 if allowed_extensions.contains(&file_extension.to_str().unwrap_or("")) {
-                    print!("File {:?} change detected, sending ", &file_path.file_name().unwrap_or(OsStr::new("")));
-                    match send_file(&sess, &file_path) {
-                        Ok(()) => print!(""),
-                        Err(s) => print!("ERROR: {}\r\n", s),
+                    print!("File {:?} has changed, sending ", &file_path.file_name().unwrap_or(OsStr::new("")));
+                    sess = match send_file(sess, &file_path) {
+                        Ok(session) => session,
+                        Err(s) => {
+                            panic!("{}", s);
+                        },
                     }
                 }
             }
