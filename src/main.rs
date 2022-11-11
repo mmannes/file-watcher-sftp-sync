@@ -36,6 +36,7 @@ fn send_file(mut sess: Session, file: &Path) -> Result<Session, &'static str> {
     }
     let relative_dir = relative_path.unwrap();
     let remote_file = remote_path.join(relative_dir);
+    let relative_dir_to_run_test = relative_dir.clone();
     print!("to remote destination: '{}'... ", remote_file.display());
     let channel = sess.scp_send(remote_file.as_path(),
                                         0o644, file_size, None);
@@ -48,6 +49,7 @@ fn send_file(mut sess: Session, file: &Path) -> Result<Session, &'static str> {
             remote_file.close().unwrap();
             remote_file.wait_close().unwrap();
             print!("OK\r\n");
+            run_test(&relative_dir_to_run_test);
             Ok(sess)
         },
         Err(error) => {
@@ -55,10 +57,12 @@ fn send_file(mut sess: Session, file: &Path) -> Result<Session, &'static str> {
             match error.code() {
                 ssh2::ErrorCode::Session(i) => {
                     if i == -7 {
-                        println!("Session error with code {}, trying to reconnect...", i);
+                        print!(" (disconnected ");
                         let tcp: TcpStream;
                         (sess, tcp) = connect();
                         sess = auth_to_ssh_host(tcp, sess);
+                        print!("connected) ");
+                        print_apache2_error_log();
                         return send_file(sess, &file);
                     } else {
                         println!("Session error with code {}", i);
@@ -95,6 +99,7 @@ fn send_file(mut sess: Session, file: &Path) -> Result<Session, &'static str> {
                             remote_file.close().unwrap();
                             remote_file.wait_close().unwrap();
                             print!("OK\r\n");
+                            run_test(&relative_dir_to_run_test);
                             Ok(sess)
                         },
                         Err(_) => Err("Failed when trying to send file after creating its path, probably there is a permission problem.")
@@ -110,6 +115,34 @@ fn connect() -> (ssh2::Session, TcpStream){
     let sess = Session::new().unwrap();
     let tcp = TcpStream::connect("192.168.99.192:22").unwrap();
     return (sess, tcp)
+}
+
+fn run_test(filename: &Path) {
+    if filename.file_name().unwrap().to_str().unwrap().get(0..5).unwrap() != "test_" || filename.extension().unwrap().to_str() != Some("php") {
+        return;
+    }
+    println!("It's a test, running... ");
+    let (mut sess, tcp) = connect();
+    sess = auth_to_ssh_host(tcp, sess);
+    let mut channel = sess.channel_session().unwrap();
+    let mut command = String::from("sudo docker exec development-docker-amd64_webserver_1 sh -c \"php -c /etc/php/5.6/apache2 /media/www/");
+    command.push_str(filename.to_str().unwrap());
+    command.push_str("\"");
+    println!("{}", &command);
+    channel.exec(&command).unwrap();
+    //let mut s = String::new();
+    //channel.read_to_string(&mut s).unwrap();
+    let mut buffer: Vec<u8> = Vec::new();
+    channel.read_to_end(&mut buffer).unwrap();
+    let s = match std::str::from_utf8(&buffer[..]) {
+        Ok(v) => v,
+        Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+    };
+    print!("{}", s);
+    match channel.close() {
+        Ok(_) => (),
+        Err(_) => println!("Failed closing channel after running test."),
+    };
 }
 
 fn print_apache2_error_log() -> thread::JoinHandle<()> {
@@ -156,10 +189,13 @@ fn main() {
             for event in e {
                 let file_path = Path::new(&event.path);
                 let file_extension = file_path.extension().unwrap_or(OsStr::new(""));
+                let file_name = file_path.file_name().unwrap_or(OsStr::new(""));
                 if allowed_extensions.contains(&file_extension.to_str().unwrap_or("")) {
-                    print!("File {:?} has changed, sending ", &file_path.file_name().unwrap_or(OsStr::new("")));
+                    print!("File {:?} has changed, sending ", &file_name);
                     sess = match send_file(sess, &file_path) {
-                        Ok(session) => session,
+                        Ok(session) => {
+                            session
+                        },
                         Err(s) => {
                             panic!("{}", s);
                         },
