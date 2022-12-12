@@ -1,0 +1,10 @@
+# Debounce timeout in miliseconds
+debounce_timeout = 200
+
+[sync_to_remote]
+address = "192.168.1.1:22"
+user = "your_user_name"
+password = "your_password"
+path = "/home/your_user_name/some_dir/"
+allowed_extensions = ["php", "html", "css", "js", "rs"]
+
