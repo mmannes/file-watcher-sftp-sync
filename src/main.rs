@@ -16,9 +16,48 @@ use crate::RemoteSync::*;
 mod config;
 
 const CONFIG_FILE: &str = "file-sync.toml";
+fn send_or_remove_file(config: &config::Config, mut sess: Session, file: &Path) -> Result<Session, &'static str> {
+    match fs::read(file) {
+        Ok(local_file) => {
+            print!(", sending ");
+            send_file(&config, sess, &file, local_file)
+        },
+        Err(_) => {
+            print!(", removing ");
+            remove_file_from_remote(&config, sess, &file)
+        }
+    }
+}
 
-fn send_file(config: &config::Config, mut sess: Session, file: &Path) -> Result<Session, &'static str> {
-    let local_file = fs::read(file).unwrap();
+fn remove_file_from_remote(config: &config::Config, mut sess: Session, file: &Path) -> Result<Session, &'static str> {
+    let config_path = &config.remote_server.as_ref().unwrap().path.clone();
+    let remote_path = Path::new(config_path);
+    let current_dir = env::current_dir().unwrap();
+    let relative_path = file.strip_prefix(current_dir);
+    if relative_path.is_err(){
+        // relative_path being an Err means that we tried to get the parent directory above the
+        // directory we are listening
+        return Err("Failed trying to create the path to file in the remote server")
+    }
+    let relative_dir = relative_path.unwrap();
+    let remote_file = remote_path.join(relative_dir);
+    print!("from remote destination: '{}'... ", remote_file.display());
+    let sftp = sess.sftp();
+    match sftp {
+        Ok(sftp) => {
+            match sftp.unlink(&remote_file) {
+                Ok(_) => {
+                    print!("OK\r\n");
+                    Ok(sess)
+                },
+                Err(_) => Err("Failed to remove file from remote server.")
+            }
+        },
+        Err(_) => Err("Failed to open sftp session.")
+    }
+}
+
+fn send_file(config: &config::Config, mut sess: Session, file: &Path, local_file: Vec<u8>) -> Result<Session, &'static str> {
     let file_size: u64 = local_file.len().try_into().unwrap();
     let config_path = &config.remote_server.as_ref().unwrap().path.clone();
     let remote_path = Path::new(config_path);
@@ -56,7 +95,7 @@ fn send_file(config: &config::Config, mut sess: Session, file: &Path) -> Result<
                         sess = connect(&config);
                         print!("connected) ");
                         print_apache2_error_log(&config);
-                        return send_file(&config, sess, &file);
+                        return send_or_remove_file(&config, sess, &file);
                     } else {
                         println!("Session error with code {}", i);
                     }
@@ -275,8 +314,7 @@ fn main() {
                     print!("File {:?} has changed", &file_name);
                     remote_sync = match remote_sync {
                         Enabled(sess) => {
-                            print!(", sending ");
-                            let modified_session = match send_file(&config, sess, &file_path) {
+                            let modified_session = match send_or_remove_file(&config, sess, &file_path) {
                                 Ok(session) => {
                                     session
                                 },
