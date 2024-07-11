@@ -174,7 +174,7 @@ fn run_test(config: &config::Config, filename: &Path) {
     let sess = connect(&config);
     let mut channel = sess.channel_session().unwrap();
     //todo!("create a config inside .toml file in order to execute some command, filename should be a variable to that command.");
-    let mut command = String::from("sudo docker exec development-docker-amd64_webserver_1 sh -c \"php -c /etc/php/5.6/apache2 /media/www/");
+    let mut command = String::from("sudo docker exec development-docker-amd64-webserver-1 sh -c \"php -c /etc/php/5.6/apache2 /media/www/");
     command.push_str(filename.to_str().unwrap());
     command.push_str("\"");
     println!("{}", &command);
